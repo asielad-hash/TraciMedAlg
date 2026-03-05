@@ -154,11 +154,59 @@ From notebook (demo 7.mp4, 1000 frames, 16 objects, 960×540):
 - Video propagation: ~35 minutes
 - Output: MP4 with mask overlays
 
-### 2.8 Setup
+### 2.8 Prerequisites
+- Windows 11 with NVIDIA GPU (CUDA 12.6 compatible)
+- Miniconda / Anaconda
+- SAM2.1 Hiera Large checkpoint (3.3 GB)
+- SAM2 config: `sam2.1_hiera_l.yaml`
+
+### 2.9 Installation
+```bash
+# 1. Create / activate conda environment
+conda activate sam3
+
+# 2. Install PyTorch with CUDA
+pip install torch==2.7.0 torchvision --index-url https://download.pytorch.org/whl/cu126
+
+# 3. Install SAM2
+pip install sam2  # or: git clone + pip install -e .
+
+# 4. Install additional dependencies
+pip install supervision loguru tqdm transformers
+```
+
+### 2.10 Running
 ```bash
 conda activate sam3
-pip install torch==2.7.0 torchvision --index-url https://download.pytorch.org/whl/cu126
-pip install supervision loguru tqdm transformers
-pip install sam2  # or clone + pip install -e .
-python -c "from tool_tracking import ToolTracking; t = ToolTracking('video.mp4'); t.run()"
+cd TraciMedAlg
+
+# Option 1: Python script
+python tool_tracking.py
+
+# Option 2: Jupyter notebook (interactive)
+jupyter notebook track_grounded.ipynb
 ```
+
+**Programmatic usage:**
+```python
+from tool_tracking import ToolTracking
+
+tracker = ToolTracking(
+    source_video=r"path\to\video.mp4",
+    text_prompt="medical tool.",
+    scale_factor=0.5,
+    start_idx=0,
+    end_idx=1000,
+    box_threshold=0.40,
+    text_threshold=0.50
+)
+output_path = tracker.run(visualize=False)
+tracker.cleanup()
+# Output: video-result.mp4 in same directory
+```
+
+**Notes:**
+- No web server — this is a batch processing pipeline
+- Output video is saved alongside the source with `-result` suffix
+- Temporary JPEG frames are extracted to a directory named after the video
+- GPU memory is freed by calling `cleanup()` or using `run()` which calls it automatically
