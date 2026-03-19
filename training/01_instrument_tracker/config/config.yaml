@@ -1,0 +1,96 @@
+# ============================================================
+# 01 — INSTRUMENT TRACKER
+# Detect, track & count instruments on mayo/back table
+# (clear view, identifiable instruments)
+# ============================================================
+
+component: "instrument_tracker"
+description: >
+  Vision model for surgical instrument detection, segmentation,
+  tracking, and counting on mayo table and back table where
+  instruments are clearly visible and individually identifiable.
+
+model:
+  checkpoint: "sam3.pt"
+  output_dir: "./checkpoints/instrument_tracker"
+  precision: "bfloat16"
+
+dataset:
+  root: "./data"
+  annotation_format: "coco"
+  split_ratio:
+    train: 0.70
+    val: 0.15
+    test: 0.15
+  stratify_by: ["site", "specialty"]
+  site_holdout: true
+
+  instrument_taxonomy:
+    critical:
+      - "surgical sponge"
+      - "lap sponge"
+      - "ray-tec"
+      - "neuro patty"
+      - "cottonoid"
+      - "keith needle"
+      - "free needle"
+      - "suture tail"
+    high:
+      - "scalpel"
+      - "metzenbaum scissors"
+      - "mayo scissors"
+      - "kelly clamp"
+      - "kocher"
+      - "allis"
+      - "babcock"
+    medium:
+      - "surgical retractor"
+      - "richardson"
+      - "army-navy"
+      - "gelpi"
+      - "weitlaner"
+      - "surgicel"
+      - "gelfoam"
+      - "hemostatic clip"
+
+training:
+  epochs: 50
+  batch_size: 4
+  learning_rate: 1.0e-5
+  weight_decay: 0.01
+  optimizer: "AdamW"
+  scheduler: "cosine"
+  warmup_epochs: 5
+  gradient_accumulation_steps: 4
+  max_grad_norm: 1.0
+  early_stopping_patience: 10
+
+  augmentations:
+    surgical_glare: true
+    partial_occlusion: true
+    blood_contamination: true
+    color_jitter:
+      brightness: 0.3
+      contrast: 0.3
+      saturation: 0.2
+    horizontal_flip: true
+
+  # Count event detection
+  count_events: ["LOST", "NEW", "BACK"]
+
+  # Per-class confidence calibration
+  presence_threshold: 0.5
+  per_class_threshold_tuning: true
+
+evaluation:
+  targets:
+    detection_auc: 0.90
+    segmentation_miou: 0.85
+    tracking_hota: 0.80
+    count_accuracy: 0.95
+    false_alarm_rate_max: 0.05
+    latency_median_ms: 1000
+
+exemplar_library:
+  target_per_class: 50
+  format: "standardized_crop_white_bg"

@@ -1,0 +1,56 @@
+# ============================================================
+# 05 — PRIVACY ENGINE
+# Real-time face blur + text/badge masking + anonymization
+# ============================================================
+
+component: "privacy_engine"
+description: >
+  Real-time anonymization pipeline — all PHI must be removed
+  before any data leaves the OR or is stored. Runs BEFORE all
+  other inference. Hard constraint: sub-200ms per frame.
+
+face_detection:
+  method: "retinaface"            # handles OR conditions (masks, caps)
+  blur_method: "gaussian"
+  blur_sigma: 15
+  handles:
+    - "surgical masks"
+    - "surgical caps"
+    - "partial face occlusion"
+    - "strong overhead lighting"
+    - "multiple angles"
+
+text_detection:
+  method: "paddleocr"
+  targets:
+    - "badges on scrubs"
+    - "name tags on lanyards"
+    - "monitor screens"
+    - "whiteboards"
+    - "patient labels"
+  masking: "solid_fill"           # solid rectangle over detected text
+
+voice_anonymization:
+  method: "mcadams_coefficient"   # preserves speech intelligibility
+  note: "Removes speaker identity while keeping words recognizable"
+
+encryption:
+  at_rest: "AES-256"
+  in_transit: "TLS-1.3"
+
+# This pipeline uses pre-trained models WITHOUT custom fine-tuning.
+# OR face conditions (masks, caps) are handled well by RetinaFace
+# out of the box. Only OR-specific tuning is threshold adjustment.
+training_required: false
+
+evaluation:
+  targets:
+    face_detection_recall: 0.99     # >= 99% faces blurred
+    badge_detection_recall: 0.98    # >= 98% badges masked
+    latency_per_frame_ms: 200       # hard constraint
+    false_positive_rate: 0.05       # don't over-blur
+
+compliance:
+  - "HIPAA de-identification standard"
+  - "GDPR Article 17 (right to erasure)"
+  - "Site-specific DPO review required"

@@ -1,0 +1,80 @@
+# ============================================================
+# 04 — CAMERA CONTROLLER
+# PTZ auto-aim in two operational modes
+# ============================================================
+
+component: "camera_control"
+type: "classic"                   # No ML training — calibration only
+description: >
+  Controls PTZ cameras in two modes:
+  A) Table Mode — tracks mayo/tray table to keep instruments in frame
+  B) Room Mode — wide-angle overview for workflow detection and
+     feeding events to Instrument Tracker and Tray Monitor
+
+# --- Mode A: Table Mode ---
+table_mode:
+  description: >
+    Auto-aim PTZ camera to follow the mayo table or tray table.
+    Keeps the instrument area centered in frame.
+
+  tracking:
+    method: "kalman_filter"       # smooth centroid trajectory
+    controller: "PID"             # prevent oscillation
+    dead_zone_pixels: 30          # ignore micro-movement
+    update_rate_hz: 10
+    smooth_factor: 0.7
+
+  roi:
+    type: "table_boundary"        # track within table edges
+    auto_detect: true             # detect table edges from first frame
+
+# --- Mode B: Room Mode ---
+room_mode:
+  description: >
+    Wide-angle overview of the entire OR room.
+    Feeds video to: Surgical Workflow (#03) for phase detection,
+    and detects personnel movement patterns.
+    Can also provide zoom-in feeds to Instrument Tracker (#01) and
+    Tray Monitor (#02) when dedicated cameras are not available.
+
+  coverage:
+    fov_target: "full_room"
+    preset_positions:
+      - name: "overview"
+        pan: 0
+        tilt: -15
+        zoom: 1.0
+      - name: "mayo_table"
+        pan: -30
+        tilt: -20
+        zoom: 3.0
+      - name: "back_table"
+        pan: 45
+        tilt: -25
+        zoom: 2.5
+      - name: "surgical_field"
+        pan: 0
+        tilt: -30
+        zoom: 4.0
+
+  switching:
+    mode: "phase_driven"          # switch based on surgical phase
+    rules:
+      setup_preparation: "overview"
+      incision_active_surgery: "surgical_field"
+      count_reconciliation: "mayo_table"
+      closure: "surgical_field"
+      turnover_room_reset: "overview"
+
+# --- Shared Camera Settings ---
+camera:
+  protocol: "ONVIF"               # standard IP camera protocol
+  resolution: "1080p"
+  framerate: 30
+  ptz_speed_limit: 0.5            # max PTZ speed (prevent jerky motion)
+
+calibration:
+  pixel_to_angle_matrix: null     # computed per-camera at installation
+  per_camera_dead_zone: true
+  performed_by: "TrackiMed technician"
+  validated_at: "installation sign-off"

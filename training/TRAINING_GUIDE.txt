@@ -1,0 +1,644 @@
+================================================================
+TRACKIMED ORKing — ALGORITHM TRAINING & TESTING FRAMEWORK
+Master Guide v3.0
+================================================================
+
+Reference: TRK-ALGO-001 Algorithm Development Strategy
+Date: March 2026
+
+
+================================================================
+THE STORY
+================================================================
+
+Every year, thousands of surgical instruments and sponges are
+accidentally left inside patients. The consequences range from
+infection to reoperation to death. The root cause is simple:
+counting instruments by hand, in a high-stress environment,
+with no technological backup.
+
+TrackiMed's ORKing system solves this by placing AI-powered
+cameras in the operating room. The system watches the surgical
+field in real time, knows exactly which instruments are on the
+table, tracks every instrument that moves in or out of the
+surgical tray, and raises an alert the moment something goes
+missing.
+
+But instrument counting is only the beginning. The same camera
+feeds power workflow intelligence — recognizing what phase of
+surgery is underway, detecting idle time that inflates costs,
+and eventually capturing verbal count calls and medication
+administration to cross-check against the visual evidence.
+
+All of this must happen under strict constraints: real-time
+performance (under 1 second), absolute patient privacy (every
+face blurred before any data is stored), and clinical-grade
+accuracy that can withstand regulatory scrutiny for a 510(k)
+medical device submission.
+
+This document is the complete operational guide for building,
+training, testing, and validating every algorithm component in
+the ORKing system.
+
+
+================================================================
+THE TWO INSTRUMENT PROBLEMS
+================================================================
+
+There are two fundamentally different vision challenges in the
+OR, and they require different algorithmic approaches:
+
+  PROBLEM 1 — THE TABLE (clear view)
+  The mayo table and back table hold instruments that are
+  visible, separated, and individually identifiable. Here we
+  can detect each instrument, draw a pixel-perfect mask around
+  it, track its identity across frames, classify what it is,
+  and maintain a running count. When something disappears, we
+  know exactly what went missing.
+
+  → Solved by: INSTRUMENT TRACKER (#01)
+
+  PROBLEM 2 — THE TRAY (crowded, occluded)
+  The instrument tray is a dense pile of metal. Individual
+  instruments overlap, reflect light unpredictably, and are
+  often impossible to distinguish. We cannot track each one.
+  Instead, we watch for EVENTS: a hand reaches in and takes
+  something out (TAKE_OUT), or puts something back (PUT_BACK).
+  The tray is a black box — we only monitor its boundary.
+
+  → Solved by: TRAY MONITOR (#02)
+
+Together, these two components cover the full instrument
+lifecycle: from organized display to crowded storage and back.
+
+
+================================================================
+THE FULL SYSTEM — 6 COMPONENTS
+================================================================
+
+  #   COMPONENT              TYPE          STATUS
+  ──────────────────────────────────────────────────────
+  01  Instrument Tracker     ML            Active
+  02  Tray Monitor           ML + Classic  Active
+  03  Surgical Workflow      ML + Classic  Active
+  04  Camera Controller      Classic       Active
+  05  Privacy Engine         Classic + ML  Active
+  06  OR Speech              ML            Planned (future)
+
+
+  01 — INSTRUMENT TRACKER
+       Detect, segment, track & count instruments on mayo/back
+       table. Instruments are clearly visible and individually
+       identifiable. Generates LOST/NEW/BACK count alerts.
+       The core safety component — if a sponge goes missing,
+       this is what catches it.
+
+  02 — TRAY MONITOR
+       Detect instruments taken out / put back into the crowded
+       instrument tray. Event-based detection (IN/OUT) — cannot
+       individually track inside the tray. Watches for hand-tray
+       interactions to infer what happened.
+
+  03 — SURGICAL WORKFLOW
+       Two sub-components:
+       A) Phase recognition — classify the current surgical phase
+          (setup → incision → count → closure → turnover)
+       B) Idle detection — find non-operative idle periods where
+          no productive work is happening. Feeds directly into
+          hospital operations efficiency reporting.
+
+  04 — CAMERA CONTROLLER
+       PTZ camera auto-aim in two operational modes:
+       A) Table Mode — track mayo/tray table, keep instruments
+          in frame. Feed video to #01 and #02.
+       B) Room Mode — wide-angle overview of the entire OR.
+          Feed video to #03 for workflow detection. Can zoom
+          into tables when dedicated cameras are unavailable.
+
+  05 — PRIVACY ENGINE
+       Real-time anonymization — the gatekeeper. Every frame
+       passes through this FIRST, before any other processing.
+       Blurs faces (even with surgical masks and caps), masks
+       badge text and monitor screens, scrambles voice identity.
+       Hard constraint: < 200ms per frame. No PHI ever persists.
+
+  06 — OR SPEECH (future)
+       Transcribe OR speech in real time. Not a standalone
+       feature — it feeds critical signals to other engines:
+         - Count calls → Instrument Tracker (#01) for count
+           verification ("sponge count: ten")
+         - Instrument requests → Tray Monitor (#02) to predict
+           upcoming TAKE_OUT events ("give me the Kocher")
+         - Workflow cues → Surgical Workflow (#03) for phase
+           transition hints ("let's do the count")
+         - Medication calls → future safety engine
+       Development begins when Phase 1 audio data is available.
+
+
+================================================================
+HOW COMPONENTS CONNECT
+================================================================
+
+  The data flow through the system:
+
+                   ┌──────────────┐
+                   │  OR Cameras  │
+                   └──────┬───────┘
+                          │
+                   ┌──────▼───────┐
+                   │ Privacy      │  ← FIRST: blur faces, mask
+                   │ Engine (#05) │    badges, encrypt everything
+                   └──────┬───────┘
+                          │
+            ┌─────────────┼─────────────┐
+            │             │             │
+     ┌──────▼───────┐    │      ┌──────▼───────┐
+     │ Camera       │    │      │ Camera       │
+     │ Table Mode   │    │      │ Room Mode    │
+     │ (#04a)       │    │      │ (#04b)       │
+     └──────┬───────┘    │      └──────┬───────┘
+            │             │             │
+     ┌──────▼───────┐    │      ┌──────▼───────┐
+     │ Instrument   │    │      │ Surgical     │
+     │ Tracker (#01)│    │      │ Workflow(#03)│
+     └──────────────┘    │      └──────────────┘
+                         │
+                  ┌──────▼───────┐
+                  │ Tray Monitor │
+                  │ (#02)        │
+                  └──────────────┘
+
+  OR Speech (#06, future) feeds into #01, #02, #03:
+    Count calls       → verify instrument counts
+    Instrument names  → predict tray events
+    Phase cues        → assist phase transitions
+
+
+================================================================
+SHARED LIBRARY
+================================================================
+
+  All components share a common Python library at:
+    training/shared/
+
+  This avoids code duplication and ensures consistency.
+  Extracted from the production codebase (trackInstruments/).
+
+  Module              What It Provides
+  ─────────────────────────────────────────────────────────
+  config.py           YAML config loading, path resolution
+  video_io.py         Frame extraction, video metadata, I/O
+  sam3_utils.py       SAM3 model loading, session management
+  mask_utils.py       Mask rendering, identity swap correction
+  annotation_io.py    Keyframe/COCO annotation loading
+  event_detection.py  LOST/NEW/BACK event state machine
+  cv_utils.py         Homography, mask warping, anonymization
+  eval_metrics.py     IoU, HOTA, AUC, F1, WER, latency
+  visualization.py    Overlay rendering, matplotlib plots
+
+
+================================================================
+FRAMEWORK FOLDER STRUCTURE
+================================================================
+
+  training/
+  ├── TRAINING_GUIDE.txt                    ← THIS FILE
+  ├── shared/                               ← reusable Python library
+  │   ├── config.py, video_io.py, sam3_utils.py, mask_utils.py,
+  │   ├── annotation_io.py, event_detection.py, cv_utils.py,
+  │   ├── eval_metrics.py, visualization.py
+  │
+  ├── 01_instrument_tracker/
+  │   ├── config/config.yaml
+  │   ├── data_prep/
+  │   │   ├── extract_frames.py             ← video → JPEGs
+  │   │   ├── generate_zero_shot.py         ← SAM3 auto-annotation
+  │   │   ├── convert_to_coco.py            ← meta → COCO JSON
+  │   │   └── prepare_splits.py             ← stratified split
+  │   ├── train/
+  │   │   ├── export_yolo_dataset.py        ← YOLO-seg format
+  │   │   └── train_detector.py             ← YOLOv8-seg training
+  │   ├── eval/
+  │   │   ├── evaluate_tracking.py          ← mIoU, HOTA, count
+  │   │   └── evaluate_detection.py         ← AUC-ROC per class
+  │   ├── legacy/                           ← V1 (GroundingDINO+SAM2)
+  │   │   ├── tool_tracking.py
+  │   │   └── track_grounded.ipynb
+  │   └── data/
+  │       ├── DATA_README.txt
+  │       ├── videos/, annotations/, exemplars/, images/
+  │
+  ├── 02_tray_monitor/
+  │   ├── config/config.yaml
+  │   ├── data_prep/
+  │   │   ├── extract_event_clips.py        ← cut around events
+  │   │   ├── label_events.py               ← annotation GUI
+  │   │   └── prepare_splits.py
+  │   ├── train/
+  │   │   └── train_hand_detector.py        ← hand/glove detection
+  │   ├── eval/
+  │   │   └── evaluate_events.py            ← event F1, accuracy
+  │   └── data/
+  │       ├── DATA_README.txt
+  │       ├── videos/, annotations/, event_clips/
+  │
+  ├── 03_surgical_workflow/
+  │   ├── config/config.yaml
+  │   ├── data_prep/
+  │   │   ├── extract_phase_clips.py        ← temporal clips
+  │   │   ├── extract_idle_windows.py       ← motion + audio
+  │   │   └── prepare_splits.py
+  │   ├── train/
+  │   │   ├── train_phase.py                ← ResNet+LSTM classifier
+  │   │   └── train_idle.py                 ← MLP binary classifier
+  │   ├── eval/
+  │   │   └── evaluate.py                   ← phase F1, idle P/R
+  │   └── data/
+  │       ├── DATA_README.txt
+  │       ├── videos/, phase_labels/, idle_labels/, clips/
+  │
+  ├── 04_camera_control/
+  │   ├── config/config.yaml
+  │   ├── scripts/
+  │   │   ├── calibrate_camera.py           ← ONVIF calibration
+  │   │   ├── define_roi.py                 ← interactive ROI tool
+  │   │   ├── test_tracking.py              ← Kalman + PID test
+  │   │   └── test_presets.py               ← preset validation
+  │   └── data/
+  │       ├── DATA_README.txt
+  │       ├── calibration/, roi_configs/
+  │
+  ├── 05_privacy_engine/
+  │   ├── config/config.yaml
+  │   ├── data_prep/
+  │   │   └── prepare_test_set.py           ← organize test frames
+  │   ├── eval/
+  │   │   ├── evaluate.py                   ← recall, FP rate
+  │   │   └── benchmark_latency.py          ← <200ms target
+  │   └── data/
+  │       ├── DATA_README.txt
+  │       ├── videos/, test_frames/
+  │
+  └── 06_or_speech/                         ← PLANNED (future)
+      ├── config/config.yaml
+      ├── data_prep/README.txt              ← data requirements
+      ├── train/README.txt                  ← training approach
+      ├── eval/README.txt                   ← evaluation plan
+      └── data/
+          ├── DATA_README.txt
+          ├── audio/, transcripts/, noise_samples/
+
+
+================================================================
+PER-COMPONENT: WHAT TO DO
+================================================================
+
+Each ML component follows: PREPARE → TRAIN → EVALUATE
+Each data/ folder has a DATA_README.txt with exact formats.
+
+──────────────────────────────────────────────────────────────
+01 — INSTRUMENT TRACKER
+──────────────────────────────────────────────────────────────
+
+  WHAT YOU NEED:
+    [ ] Anonymized OR videos (mayo/back table view)
+    [ ] Base model weights (sam3.pt)
+    [ ] Instrument exemplar images (50+ per class)
+
+  STEP 1 — EXTRACT FRAMES:
+    python 01_instrument_tracker/data_prep/extract_frames.py \
+      --config 01_instrument_tracker/config/config.yaml \
+      --video-dir 01_instrument_tracker/data/videos \
+      --output-dir 01_instrument_tracker/data/images
+
+  STEP 2 — GENERATE ZERO-SHOT ANNOTATIONS (sam3 env):
+    python 01_instrument_tracker/data_prep/generate_zero_shot.py \
+      --config 01_instrument_tracker/config/config.yaml \
+      --video-dir 01_instrument_tracker/data/videos \
+      --output-dir 01_instrument_tracker/data/annotations/zero_shot
+
+  STEP 3 — CONVERT TO COCO (after human review):
+    python 01_instrument_tracker/data_prep/convert_to_coco.py \
+      --anno-dir 01_instrument_tracker/data/annotations \
+      --video-dir 01_instrument_tracker/data/videos \
+      --output-dir 01_instrument_tracker/data
+
+  STEP 4 — SPLIT:
+    python 01_instrument_tracker/data_prep/prepare_splits.py \
+      --config 01_instrument_tracker/config/config.yaml \
+      --coco-dir 01_instrument_tracker/data \
+      --output-dir 01_instrument_tracker/data
+
+  STEP 5 — EXPORT YOLO FORMAT:
+    python 01_instrument_tracker/train/export_yolo_dataset.py \
+      --meta-dir 01_instrument_tracker/data/annotations \
+      --images-dir 01_instrument_tracker/data/images \
+      --output-dir 01_instrument_tracker/data/yolo_dataset
+
+  STEP 6 — TRAIN:
+    python 01_instrument_tracker/train/train_detector.py \
+      --data-yaml 01_instrument_tracker/data/yolo_dataset/data.yaml \
+      --epochs 50 --imgsz 1024
+
+  STEP 7 — EVALUATE:
+    python 01_instrument_tracker/eval/evaluate_tracking.py \
+      --pred-dir 01_instrument_tracker/data/predictions \
+      --gt-dir 01_instrument_tracker/data/ground_truth \
+      --config 01_instrument_tracker/config/config.yaml
+
+    python 01_instrument_tracker/eval/evaluate_detection.py \
+      --predictions results.json --ground-truth gt.json \
+      --config 01_instrument_tracker/config/config.yaml
+
+  TARGETS:
+    AUC-ROC >= 0.90 | mIoU >= 0.85 | HOTA >= 0.80
+    Count accuracy >= 95% | False alarm rate < 5% | Latency < 1s
+
+──────────────────────────────────────────────────────────────
+02 — TRAY MONITOR
+──────────────────────────────────────────────────────────────
+
+  WHAT YOU NEED:
+    [ ] Anonymized OR videos (tray/back-table view)
+    [ ] Event annotations (TAKE_OUT / PUT_BACK timestamps)
+
+  STEP 1 — LABEL EVENTS (if not already done):
+    python 02_tray_monitor/data_prep/label_events.py \
+      --video 02_tray_monitor/data/videos/sheba_general_001_tray.mp4 \
+      --output 02_tray_monitor/data/annotations/sheba_general_001_tray_events.json
+
+  STEP 2 — EXTRACT EVENT CLIPS:
+    python 02_tray_monitor/data_prep/extract_event_clips.py \
+      --config 02_tray_monitor/config/config.yaml \
+      --video-dir 02_tray_monitor/data/videos \
+      --anno-dir 02_tray_monitor/data/annotations \
+      --output-dir 02_tray_monitor/data/event_clips
+
+  STEP 3 — SPLIT:
+    python 02_tray_monitor/data_prep/prepare_splits.py \
+      --config 02_tray_monitor/config/config.yaml \
+      --clips-dir 02_tray_monitor/data/event_clips \
+      --output-dir 02_tray_monitor/data
+
+  STEP 4 — TRAIN HAND DETECTOR:
+    python 02_tray_monitor/train/train_hand_detector.py \
+      --data-yaml 02_tray_monitor/data/hand_dataset/data.yaml \
+      --epochs 40
+
+  STEP 5 — EVALUATE:
+    python 02_tray_monitor/eval/evaluate_events.py \
+      --config 02_tray_monitor/config/config.yaml \
+      --pred-dir 02_tray_monitor/data/predictions \
+      --gt-dir 02_tray_monitor/data/ground_truth
+
+  TARGETS:
+    Event detection F1 >= 0.85 | Classification >= 0.90
+    False positive rate < 10% | Latency < 500ms
+
+──────────────────────────────────────────────────────────────
+03 — SURGICAL WORKFLOW
+──────────────────────────────────────────────────────────────
+
+  WHAT YOU NEED:
+    [ ] Anonymized OR videos (room view, full procedures)
+    [ ] Phase boundary annotations (5 phases, timestamps)
+    [ ] Idle period annotations (start/end + type)
+
+  STEP 1 — EXTRACT PHASE CLIPS:
+    python 03_surgical_workflow/data_prep/extract_phase_clips.py \
+      --config 03_surgical_workflow/config/config.yaml \
+      --video-dir 03_surgical_workflow/data/videos \
+      --phase-dir 03_surgical_workflow/data/phase_labels \
+      --output-dir 03_surgical_workflow/data/clips
+
+  STEP 2 — EXTRACT IDLE WINDOWS:
+    python 03_surgical_workflow/data_prep/extract_idle_windows.py \
+      --config 03_surgical_workflow/config/config.yaml \
+      --video-dir 03_surgical_workflow/data/videos \
+      --idle-dir 03_surgical_workflow/data/idle_labels \
+      --output-dir 03_surgical_workflow/data
+
+  STEP 3 — SPLIT:
+    python 03_surgical_workflow/data_prep/prepare_splits.py \
+      --config 03_surgical_workflow/config/config.yaml \
+      --data-dir 03_surgical_workflow/data \
+      --output-dir 03_surgical_workflow/data
+
+  STEP 4 — TRAIN PHASE RECOGNITION:
+    python 03_surgical_workflow/train/train_phase.py \
+      --config 03_surgical_workflow/config/config.yaml \
+      --data-dir 03_surgical_workflow/data
+
+  STEP 5 — TRAIN IDLE DETECTION:
+    python 03_surgical_workflow/train/train_idle.py \
+      --config 03_surgical_workflow/config/config.yaml \
+      --data-dir 03_surgical_workflow/data
+
+  STEP 6 — EVALUATE:
+    python 03_surgical_workflow/eval/evaluate.py \
+      --config 03_surgical_workflow/config/config.yaml \
+      --data-dir 03_surgical_workflow/data --mode all
+
+  TARGETS:
+    Phase F1 >= 0.88 | Phase boundary ±30s
+    Idle precision >= 0.90 | Idle recall >= 0.85
+
+──────────────────────────────────────────────────────────────
+04 — CAMERA CONTROLLER
+──────────────────────────────────────────────────────────────
+
+  TYPE: Classic algorithms — no ML training. Calibration only.
+
+  WHAT YOU NEED:
+    [ ] Camera installed and accessible via ONVIF
+    [ ] Physical access to OR for calibration
+
+  CALIBRATE:
+    python 04_camera_control/scripts/calibrate_camera.py \
+      --camera-ip 192.168.1.101 --mode table \
+      --output 04_camera_control/data/calibration/or1_cam1_table.json
+
+  DEFINE TABLE ROI:
+    python 04_camera_control/scripts/define_roi.py \
+      --camera-ip 192.168.1.101 \
+      --output 04_camera_control/data/roi_configs/or1_mayo_table_roi.json
+
+  TEST TABLE TRACKING:
+    python 04_camera_control/scripts/test_tracking.py \
+      --calibration 04_camera_control/data/calibration/or1_cam1_table.json
+
+  TEST ROOM PRESETS:
+    python 04_camera_control/scripts/test_presets.py \
+      --config 04_camera_control/config/config.yaml \
+      --camera-ip 192.168.1.101
+
+  CHECKLIST:
+    [ ] PTZ commands work via ONVIF
+    [ ] Kalman tracking is smooth (no jitter)
+    [ ] PID prevents oscillation on minor movement
+    [ ] Dead zone prevents unnecessary PTZ commands
+    [ ] Room mode presets reach correct positions
+    [ ] Phase-driven switching works with workflow input
+
+──────────────────────────────────────────────────────────────
+05 — PRIVACY ENGINE
+──────────────────────────────────────────────────────────────
+
+  TYPE: Pre-trained models — no custom training. Evaluation only.
+
+  WHAT YOU NEED:
+    [ ] Test frames with faces in OR conditions (masks, caps)
+    [ ] Test frames with badges, monitors, whiteboards
+    [ ] Ground truth bounding boxes for faces + text
+
+  PREPARE TEST SET:
+    python 05_privacy_engine/data_prep/prepare_test_set.py \
+      --input-dir /path/to/raw_test_frames \
+      --output-dir 05_privacy_engine/data/test_frames
+
+  EVALUATE:
+    python 05_privacy_engine/eval/evaluate.py \
+      --config 05_privacy_engine/config/config.yaml \
+      --test-dir 05_privacy_engine/data/test_frames \
+      --mode all
+
+  BENCHMARK LATENCY:
+    python 05_privacy_engine/eval/benchmark_latency.py \
+      --test-dir 05_privacy_engine/data/test_frames \
+      --num-frames 1000
+
+  TARGETS:
+    Face detection recall >= 99% | Badge recall >= 98%
+    Latency < 200ms per frame | False positive rate < 5%
+    No PHI passes through unblurred
+
+──────────────────────────────────────────────────────────────
+06 — OR SPEECH (future)
+──────────────────────────────────────────────────────────────
+
+  STATUS: Planned — not in active development.
+
+  Development begins when Phase 1 audio data is collected.
+  Each subfolder contains a README.txt documenting the planned
+  approach for data collection, training, and evaluation.
+
+  KEY POINT: OR Speech is not a standalone feature. It feeds
+  critical signals to every other engine:
+    Count calls        → Instrument Tracker (#01)
+    Instrument requests → Tray Monitor (#02)
+    Workflow cues      → Surgical Workflow (#03)
+    Medication calls   → future safety engine
+
+  This cross-engine dependency makes OR Speech a force
+  multiplier — it makes every other component more accurate.
+
+
+================================================================
+TRAINING ROADMAP
+================================================================
+
+  PHASE 0 — Bootstrap (Q4 2025 – Q1 2026)
+    What:  Get the system running with pre-trained models.
+    → Instrument Tracker v0.1 (zero-shot, no fine-tune)
+    → Privacy Engine validated on test frames
+    → Camera Controller calibrated in first OR
+    → Gate: functional pipeline, zero-shot demo working
+
+  PHASE 1A — Early Data, 20-50 cases (Q1-Q2 2026)
+    What:  First fine-tuned models from Sheba data.
+    → Instrument Tracker v0.5 (initial fine-tune on 20-50 cases)
+    → Tray Monitor v0.1 (first event detection model)
+    → Gate: AUC > 0.75, latency < 1s on OR hardware
+
+  PHASE 1B — Multi-Site, 50-200 cases (Q2-Q3 2026)
+    What:  Cross-site validation proves generalization.
+    → Instrument Tracker v1.0 (multi-site trained)
+    → Tray Monitor v0.5
+    → Surgical Workflow v0.1 (first phase detector)
+    → Gate: AUC > 0.85, F1 > 0.85, cross-site validated
+
+  PHASE 1C — Full Dataset, 200-1000 cases (Q3-Q4 2026)
+    What:  Production-ready models for 510(k) submission.
+    → Instrument Tracker v1.5 (production candidate)
+    → All components at v1.0
+    → Gate: AUC >= 0.90, F1 >= 0.90, 510(k) dataset ready
+
+  PHASE 2 — Workflow Models (Q4 2026 – Q1 2027)
+    What:  Workflow intelligence and efficiency reporting.
+    → Surgical Workflow v1.0
+    → Gate: Phase F1 > 0.88, idle precision > 0.90
+
+  PHASE 3 — Speech & Medication (Q2-Q3 2027)
+    What:  Audio intelligence feeds all engines.
+    → OR Speech v1.0, Medication Safety Engine
+    → Gate: WER <= 10%, count call recognition >= 95%
+
+
+================================================================
+ACCEPTANCE CRITERIA SUMMARY
+================================================================
+
+  Component              Metric                   Target
+  ─────────────────────────────────────────────────────────
+  Instrument Tracker     Detection AUC-ROC        >= 0.90
+  Instrument Tracker     Segmentation mIoU        >= 0.85
+  Instrument Tracker     Tracking HOTA            >= 0.80
+  Instrument Tracker     Count accuracy           >= 95%
+  Instrument Tracker     False alarm rate          < 5%
+  Tray Monitor           Event detection F1       >= 0.85
+  Tray Monitor           Event classification     >= 0.90
+  Tray Monitor           False positive rate       < 10%
+  Surgical Workflow      Phase F1                 >= 0.88
+  Surgical Workflow      Phase boundary           ±30 sec
+  Surgical Workflow      Idle precision           >= 0.90
+  Surgical Workflow      Idle recall              >= 0.85
+  Privacy Engine         Face detection recall    >= 99%
+  Privacy Engine         Badge detection recall   >= 98%
+  Privacy Engine         Latency per frame         < 200ms
+  System (end-to-end)    Detection latency        median < 1s
+  OR Speech (future)     WER                       <= 10%
+  OR Speech (future)     Count call recognition   >= 95%
+
+  Validation design:
+    - 70/15/15 train/val/test split, stratified by site + specialty
+    - Site-holdout: train on 3 sites, test on 4th
+    - Inter-annotator reliability: Cohen's kappa >= 0.85
+    - All targets must be met on OR edge hardware (RTX 4090)
+
+
+================================================================
+PREREQUISITES
+================================================================
+
+  Python environment:
+    conda create -n trackimed_train python=3.11
+    conda activate trackimed_train
+
+  Core:
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+    pip install numpy opencv-python pyyaml
+
+  Instrument Tracker / Tray Monitor:
+    pip install ultralytics>=8.3.237
+
+  Surgical Workflow:
+    pip install torchvision       # ResNet feature extraction
+
+  Privacy Engine:
+    pip install retinaface paddleocr paddlepaddle
+
+  OR Speech (future):
+    pip install transformers datasets torchaudio
+
+  Experiment tracking:
+    pip install wandb
+    wandb login
+
+  SAM3 (for zero-shot annotation generation):
+    Must run in the sam3 conda environment.
+    Scripts that need SAM3 are marked with "(sam3 env)".
+
+
+================================================================
+END OF GUIDE
+================================================================

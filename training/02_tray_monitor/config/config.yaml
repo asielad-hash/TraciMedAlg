@@ -1,0 +1,64 @@
+# ============================================================
+# 02 — TRAY MONITOR
+# Detect instruments taken out / put back into crowded tray
+# (event-based IN/OUT detection, not full tracking)
+# ============================================================
+
+component: "tray_monitor"
+description: >
+  Monitors the instrument tray where instruments are too
+  densely packed to individually detect and track. Instead,
+  detects EVENTS: instrument taken out (OUT) or put back (IN).
+  Works by detecting hands entering/leaving the tray area
+  combined with instrument count change detection.
+
+model:
+  checkpoint: "sam3.pt"
+  output_dir: "./checkpoints/tray_monitor"
+  precision: "bfloat16"
+
+dataset:
+  root: "./data"
+  annotation_format: "event_clips"
+  split_ratio:
+    train: 0.70
+    val: 0.15
+    test: 0.15
+  stratify_by: ["site"]
+
+  event_types:
+    - "TAKE_OUT"        # hand reaches in, removes instrument
+    - "PUT_BACK"        # hand reaches in, returns instrument
+    - "NO_EVENT"        # background / no interaction
+
+training:
+  epochs: 40
+  batch_size: 8
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  optimizer: "AdamW"
+  scheduler: "cosine"
+  warmup_epochs: 3
+  early_stopping_patience: 10
+
+  # Temporal clip settings
+  clip_length_frames: 32        # ~1 second at 30fps
+  clip_stride_frames: 8
+
+  # Detection approaches (combined)
+  approaches:
+    hand_detection: true        # detect hand entering tray ROI
+    frame_differencing: true    # motion in tray ROI
+    count_delta: true           # change in visible instrument count
+
+  augmentations:
+    temporal_jitter: true
+    brightness_variation: true
+    speed_perturbation: [0.8, 1.2]
+
+evaluation:
+  targets:
+    event_detection_f1: 0.85
+    event_classification_accuracy: 0.90
+    false_positive_rate_max: 0.10
+    latency_median_ms: 500

@@ -1,0 +1,86 @@
+# ============================================================
+# 06 — OR SPEECH (future — documented as requirement)
+# Transcribe OR speech for medication, instruments, count calls
+# ============================================================
+
+component: "or_speech"
+status: "PLANNED — not yet in active development"
+description: >
+  Transcribes operating room speech in real-time to feed
+  other system engines. This is NOT a standalone feature — it
+  provides critical input signals to:
+    - Count Engine: verbal count calls ("sponge count: ten")
+    - Instrument Tracker: instrument requests ("give me the Kocher")
+    - Medication tracking: drug administration calls
+    - Surgical Workflow: verbal phase cues
+
+  NOTE: This component is documented as a future requirement.
+  Active development begins when Phase 1 audio data is available.
+
+# --- What OR Speech Must Capture ---
+speech_targets:
+
+  count_calls:
+    description: >
+      Verbal count calls between surgeon and nurse.
+      Critical for validating instrument count reconciliation.
+    examples:
+      - "sponge count: ten"
+      - "needle count correct"
+      - "instrument count complete"
+      - "we're missing a sponge"
+      - "all needles accounted for"
+    feeds: "Instrument Tracker (#01) — count verification"
+
+  instrument_requests:
+    description: >
+      Surgeon requesting specific instruments by name.
+      Predicts which instrument will be taken from tray.
+    examples:
+      - "give me the metzenbaum"
+      - "I need a Kelly clamp"
+      - "scalpel please"
+      - "retractor"
+    feeds: "Tray Monitor (#02) — predict upcoming TAKE_OUT event"
+
+  medication_calls:
+    description: >
+      Drug administration announcements.
+      For future medication safety tracking.
+    examples:
+      - "100 mg cefazolin IV"
+      - "give epi"
+      - "local with lidocaine"
+      - "heparin is in"
+    feeds: "Future Medication Safety Engine"
+
+  workflow_cues:
+    description: >
+      Verbal signals indicating phase transitions.
+    examples:
+      - "let's do the count"
+      - "closing now"
+      - "we're done"
+      - "time out"
+      - "knife to skin"
+    feeds: "Surgical Workflow (#03) — phase transition hints"
+
+# --- Technical Requirements ---
+requirements:
+  wer_target: 0.10                # <= 10% WER on OR vocabulary
+  count_call_recognition: 0.95    # >= 95%
+  streaming: true                 # real-time chunked inference
+  vad: true                       # voice activity detection to save GPU
+  noise_robust: true              # must work with suction, alarms, cautery
+  speaker_independent: true       # multiple OR staff voices
+
+# --- Data Collection Plan ---
+data_collection:
+  source: "Phase 1 OR recordings (audio track)"
+  annotation: "Manual transcription with clinical annotator review"
+  noise_samples_needed:
+    - "suction device"
+    - "monitor alarms"
+    - "electrosurgery unit"
+    - "ventilator"
+    - "ambient OR chatter"

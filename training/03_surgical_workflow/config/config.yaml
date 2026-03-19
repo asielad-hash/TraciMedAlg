@@ -1,0 +1,72 @@
+# ============================================================
+# 03 — SURGICAL WORKFLOW
+# Phase recognition + idle time detection
+# ============================================================
+
+component: "surgical_workflow"
+description: >
+  Recognizes the current surgical phase (setup, active surgery,
+  count, closure, turnover) and detects idle periods where no
+  productive activity is happening. Outputs phase timeline and
+  idle time reports for hospital operations.
+
+# --- Phase Recognition ---
+phase_recognition:
+  phases:
+    - "setup_preparation"
+    - "incision_active_surgery"
+    - "count_reconciliation"
+    - "closure"
+    - "turnover_room_reset"
+
+  valid_transitions:
+    setup_preparation: ["incision_active_surgery"]
+    incision_active_surgery: ["count_reconciliation", "closure"]
+    count_reconciliation: ["incision_active_surgery", "closure"]
+    closure: ["turnover_room_reset"]
+    turnover_room_reset: ["setup_preparation"]
+
+  training:
+    epochs: 100
+    batch_size: 8
+    learning_rate: 5.0e-5
+    clip_length_frames: 64
+    clip_stride_frames: 16
+
+  evaluation:
+    targets:
+      f1_per_phase: 0.88
+      phase_boundary_accuracy_sec: 30
+
+# --- Idle Detection ---
+idle_detection:
+  window_size_sec: 5
+  frame_interval: 5               # RAFT: every 5th frame
+
+  training:
+    epochs: 60
+    batch_size: 32
+    learning_rate: 1.0e-3
+
+  audio:
+    sample_rate: 16000
+    rms_window_ms: 500
+    ambient_noise_calibration: true
+
+  evaluation:
+    targets:
+      precision: 0.90
+      recall: 0.85
+      duration_error_pct: 10
+
+# --- Shared ---
+dataset:
+  root: "./data"
+  split_ratio:
+    train: 0.70
+    val: 0.15
+    test: 0.15
+  stratify_by: ["site", "specialty"]
+
+model:
+  output_dir: "./checkpoints/surgical_workflow"
