@@ -787,5 +787,189 @@ Examples:
           f"--epochs 50 --imgsz 1024 --batch-size 4")
 
 
+# -----------------------------------------------------------------------
+# Notebook-callable functions (thin wrappers for interactive use)
+# -----------------------------------------------------------------------
+
+def safe_dirname(name):
+    import re
+    return re.sub(r'[^\w\s-]', '', name).strip().replace(' ', '_')[:80]
+
+
+def deduplicate_names(instruments, output_dir):
+    """Deduplicate instrument names. Returns (class_map, dedup_log_dict)."""
+    import re
+    output_dir = Path(output_dir)
+
+    COLOR_WORDS = {'blue','gold','black','silver','titanium','green','red','yellow',
+                   'purple','white','chrome','stainless','steel','colored','coated'}
+    FILLER_WORDS = {'the','a','an','with','for','and','or','of','in','on','type',
+                    'style','handle','model','mm','instrument','surgical'}
+
+    def normalize(name):
+        name = name.lower()
+        name = re.sub(r'[^a-z0-9\s]', ' ', name)
+        tokens = name.split()
+        tokens = [t for t in tokens if t not in FILLER_WORDS and t not in COLOR_WORDS]
+        tokens = [t for t in tokens if len(t) > 1]
+        return ' '.join(sorted(tokens))
+
+    name_groups = {}
+    name_to_dirs = {}
+    for inst in instruments:
+        orig = inst.get('name', '')
+        norm = normalize(orig)
+        if not norm:
+            continue
+        name_groups.setdefault(norm, []).append(orig)
+        name_to_dirs.setdefault(norm, []).append(safe_dirname(orig))
+
+    merged = {k: list(set(v)) for k, v in name_groups.items() if len(set(v)) > 1}
+
+    dedup_log = {
+        "total_instruments": len(instruments),
+        "unique_classes": len(name_groups),
+        "merged_groups": len(merged),
+        "merges": merged
+    }
+    with open(output_dir / "dedup_log.json", "w") as f:
+        json.dump(dedup_log, f, indent=2)
+
+    class_map = {}
+    for idx, norm_key in enumerate(sorted(name_groups.keys())):
+        class_map[str(idx)] = {
+            "name": name_groups[norm_key][0],
+            "normalized": norm_key,
+            "original_names": list(set(name_groups[norm_key])),
+            "exemplar_dirs": list(set(name_to_dirs[norm_key]))
+        }
+    with open(output_dir / "class_map.json", "w") as f:
+        json.dump(class_map, f, indent=2)
+
+    return class_map, dedup_log
+
+
+def build_yolo_dataset(class_map, data_dir, train_ratio=0.70, val_ratio=0.15, seed=42):
+    """Build YOLO dataset from exemplar images. Returns stats dict."""
+    data_dir = Path(data_dir)
+    random.seed(seed)
+
+    IMG_EXTS = {'.jpg', '.jpeg', '.png', '.webp'}
+    YOLO_DIR = data_dir / "yolo_dataset"
+    for split in ('train', 'val', 'test'):
+        (YOLO_DIR / "images" / split).mkdir(parents=True, exist_ok=True)
+        (YOLO_DIR / "labels" / split).mkdir(parents=True, exist_ok=True)
+
+    # Collect images per class
+    class_images = {}
+    for cid, cinfo in class_map.items():
+        images = []
+        for dirname in cinfo['exemplar_dirs']:
+            d = data_dir / "exemplars" / dirname
+            if d.exists():
+                images.extend([f for f in d.iterdir() if f.suffix.lower() in IMG_EXTS])
+        class_images[cid] = images
+
+    # Auto-label + split + export
+    per_class = {}
+    total = 0
+    for cid, imgs in class_images.items():
+        if not imgs:
+            continue
+        random.shuffle(imgs)
+        n = len(imgs)
+        if n < 3:
+            splits_list = [('train', imgs)]
+        else:
+            n_train = max(1, int(n * train_ratio))
+            n_val = max(1, int(n * val_ratio))
+            splits_list = [('train', imgs[:n_train]),
+                           ('val', imgs[n_train:n_train+n_val]),
+                           ('test', imgs[n_train+n_val:])]
+
+        counts = {'train': 0, 'val': 0, 'test': 0}
+        for split_name, split_imgs in splits_list:
+            for img_path in split_imgs:
+                dst_name = f"{class_map[cid]['normalized'].replace(' ','_')}_{img_path.stem}{img_path.suffix}"
+                shutil.copy2(img_path, YOLO_DIR / "images" / split_name / dst_name)
+
+                # Auto-label bbox
+                img = cv2.imread(str(img_path))
+                bbox = "0.5 0.5 0.9 0.9"
+                if img is not None:
+                    h, w = img.shape[:2]
+                    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    if contours:
+                        largest = max(contours, key=cv2.contourArea)
+                        x, y, bw, bh = cv2.boundingRect(largest)
+                        bbox = f"{(x+bw/2)/w:.6f} {(y+bh/2)/h:.6f} {bw/w:.6f} {bh/h:.6f}"
+
+                label_path = YOLO_DIR / "labels" / split_name / f"{Path(dst_name).stem}.txt"
+                label_path.write_text(f"{cid} {bbox}\n")
+                counts[split_name] += 1
+                total += 1
+
+        per_class[class_map[cid]['name']] = counts
+
+    # Write data.yaml
+    class_names = {int(k): v['name'] for k, v in class_map.items()}
+    yaml_content = f"path: {YOLO_DIR.resolve()}\ntrain: images/train\nval: images/val\ntest: images/test\n\nnc: {len(class_names)}\nnames: {json.dumps(class_names)}\n"
+    (YOLO_DIR / "data.yaml").write_text(yaml_content)
+
+    train_n = sum(d['train'] for d in per_class.values())
+    val_n = sum(d['val'] for d in per_class.values())
+    test_n = sum(d['test'] for d in per_class.values())
+
+    return {"total": total, "train": train_n, "val": val_n, "test": test_n,
+            "n_classes": len(per_class), "per_class": per_class}
+
+
+def show_samples(class_map, data_dir, n_classes=6, n_per_class=3):
+    """Show sample images per class with auto-label bboxes."""
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    data_dir = Path(data_dir)
+    IMG_EXTS = {'.jpg', '.jpeg', '.png', '.webp'}
+
+    class_images = {}
+    for cid, cinfo in class_map.items():
+        images = []
+        for dirname in cinfo['exemplar_dirs']:
+            d = data_dir / "exemplars" / dirname
+            if d.exists():
+                images.extend([f for f in d.iterdir() if f.suffix.lower() in IMG_EXTS])
+        if images:
+            class_images[cid] = images
+
+    show = sorted(class_images.items(), key=lambda x: len(x[1]), reverse=True)[:n_classes]
+    if not show:
+        print("No images found.")
+        return
+
+    fig, axes = plt.subplots(len(show), n_per_class, figsize=(4*n_per_class, 3.5*len(show)))
+    if len(show) == 1:
+        axes = [axes]
+
+    for row, (cid, imgs) in enumerate(show):
+        samples = random.sample(imgs, min(n_per_class, len(imgs)))
+        for col in range(n_per_class):
+            ax = axes[row][col] if len(show) > 1 else axes[col]
+            if col < len(samples):
+                img = cv2.imread(str(samples[col]))
+                if img is not None:
+                    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    ax.imshow(img)
+            ax.set_xticks([]); ax.set_yticks([])
+            if col == 0:
+                ax.set_ylabel(class_map[cid]['name'][:25], fontsize=9, rotation=0, labelpad=100, va='center')
+
+    plt.suptitle('Sample Images per Class', fontsize=14, y=1.01)
+    plt.tight_layout()
+    plt.show()
+
+
 if __name__ == "__main__":
     main()
